@@ -8,12 +8,10 @@ from supabase import create_client, Client
 # --- 1. CONFIGURACIÓN E INTERFAZ ---
 st.set_page_config(page_title="LIMS - Dashboard Epidemiológico", layout="wide")
 
-# CORRECCIÓN: Se cambió 'unsafe_allow_name' por 'unsafe_allow_html'
 st.markdown("""
     <style>
     .main { background-color: #f5f7f9; }
     div.block-container { padding-top: 2rem; }
-    /* Estilo para las métricas */
     [data-testid="stMetricValue"] { font-size: 1.8rem; }
     </style>
     """, unsafe_allow_html=True)
@@ -25,7 +23,7 @@ def init_connection():
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_KEY"]
         return create_client(url, key)
-    except Exception as e:
+    except Exception:
         st.error("Error en las credenciales de Supabase. Revisa los Secrets.")
         return None
 
@@ -37,8 +35,8 @@ def cargar_todo():
     res = supabase.table("registro_resistencia").select("*").execute()
     df = pd.DataFrame(res.data)
     
-    # Carga del GeoJSON local
-    ruta_geojson = "ec-allgeo.json"
+    # Carga del GeoJSON local (CORREGIDO EL NOMBRE)
+    ruta_geojson = "ec-all.geo.json" 
     if os.path.exists(ruta_geojson):
         with open(ruta_geojson, "r", encoding="utf-8") as f:
             geojson = json.load(f)
@@ -54,7 +52,7 @@ df_raw, geojson_ecuador = cargar_todo()
 st.title("📊 Vigilancia Epidemiológica de Resistencia")
 
 if df_raw.empty:
-    st.warning("La base de datos está vacía. Registra muestras para visualizar el dashboard.")
+    st.warning("La base de datos está vacía.")
     st.stop()
 
 c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
@@ -88,20 +86,17 @@ with c4:
 
 # --- 4. LÓGICA DE FILTRADO ---
 df = df_raw.copy()
+df = df[df[atb_sel].notnull()] # Solo registros con resultado para este ATB
 
-# Filtrar por Antibiótico (registros que tengan resultado)
-df = df[df[atb_sel].notnull()]
-
-# Filtros geográficos
 if prov_sel != "Todas":
     df = df[df['provincia'] == prov_sel]
 if canton_sel != "Todos":
     df = df[df['canton'] == canton_sel]
 
-# Casos Resistentes
+# Casos Resistentes para el Mapa de Calor
 df_res = df[df[atb_sel].astype(str).str.upper() == 'R'].copy()
 
-# --- 5. INDICADORES RÁPIDOS (Cards) ---
+# --- 5. INDICADORES RÁPIDOS ---
 m1, m2, m3, m4 = st.columns(4)
 total_muestras = len(df)
 total_res = len(df_res)
@@ -110,12 +105,7 @@ porcentaje = (total_res / total_muestras * 100) if total_muestras > 0 else 0
 m1.metric("Muestras Analizadas", total_muestras)
 m2.metric("Casos Resistentes (R)", total_res)
 m3.metric("% Resistencia", f"{porcentaje:.1f}%")
-
-if not df_res.empty:
-    top_micro = df_res['microorganismo'].mode()[0]
-    m4.metric("Microorganismo Crítico", top_micro)
-else:
-    m4.metric("Microorganismo Crítico", "N/A")
+m4.metric("Microorganismo Top", df_res['microorganismo'].mode()[0] if not df_res.empty else "N/A")
 
 st.divider()
 
@@ -123,39 +113,41 @@ st.divider()
 col_mapa, col_tabla = st.columns([2, 1])
 
 with col_mapa:
-    if not df_res.empty and geojson_ecuador:
-        # Normalizar para el GeoJSON (Ej: PICHINCHA -> Pichincha)
-        df_mapa = df_res.groupby('provincia').size().reset_index(name='conteo')
+    if geojson_ecuador:
+        # Agrupamos por provincia para contar cuántos "R" hay en cada una
+        # Forzamos formato Título (Guayas, Pichincha) para coincidir con el GeoJSON
+        df_mapa = df_res.copy()
         df_mapa['provincia_id'] = df_mapa['provincia'].str.strip().str.title()
+        
+        conteo_prov = df_mapa.groupby('provincia_id').size().reset_index(name='conteo')
 
         fig = px.choropleth_mapbox(
-            df_mapa,
+            conteo_prov,
             geojson=geojson_ecuador,
             locations='provincia_id',
-            featureidkey='properties.name',
+            featureidkey='properties.name', # Verifica que en tu JSON la llave sea 'name'
             color='conteo',
-            color_continuous_scale="Reds",
+            color_continuous_scale="YlOrRd", # Escala Amarillo-Naranja-Rojo
             mapbox_style="carto-positron",
             center={"lat": -1.8, "lon": -78.5},
             zoom=5.5,
             opacity=0.7,
-            title=f"Mapa de Calor: Resistencia a {atb_sel.replace('_', ' ').title()}"
+            title=f"Distribución Geográfica de Resistencia: {atb_sel.replace('_', ' ').title()}"
         )
         fig.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("No hay datos de resistencia (R) para mostrar en el mapa con los filtros actuales.")
+        st.error("Error al cargar el mapa (archivo JSON no disponible).")
 
 with col_tabla:
-    st.subheader("📋 Resumen Microbiano")
+    st.subheader("📋 Resumen Microbiano (Resistentes)")
     if not df_res.empty:
-        # Mostrar conteo de microorganismos resistentes
         resumen_micro = df_res['microorganismo'].value_counts().reset_index()
         resumen_micro.columns = ['Microorganismo', 'Casos R']
         st.dataframe(resumen_micro, use_container_width=True, hide_index=True)
     else:
-        st.write("No se detectaron aislamientos resistentes.")
+        st.info("Sin casos resistentes detectados.")
 
 # --- 7. TABLA DETALLADA ---
-with st.expander("🔍 Ver registros detallados del análisis"):
+with st.expander("🔍 Ver registros detallados"):
     st.dataframe(df, use_container_width=True)
