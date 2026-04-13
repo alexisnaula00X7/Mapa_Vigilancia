@@ -34,7 +34,7 @@ def cargar_datos_desde_db():
 @st.cache_resource
 def cargar_geojson_ecuador():
     # Usamos el archivo que conseguiste y subiste
-    archivo_ruta = "ec-all.geo.json"
+    archivo_ruta = "ec-allgeo.json"
     if os.path.exists(archivo_ruta):
         with open(archivo_ruta, "r", encoding="utf-8") as f:
             return json.load(f)
