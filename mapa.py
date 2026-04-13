@@ -38,7 +38,7 @@ def cargar_todo():
     df = pd.DataFrame(res.data)
     
     # Carga del GeoJSON local
-    ruta_geojson = "ec-all.geo.json"
+    ruta_geojson = "ec-allgeo.json"
     if os.path.exists(ruta_geojson):
         with open(ruta_geojson, "r", encoding="utf-8") as f:
             geojson = json.load(f)
