@@ -2,6 +2,5 @@ streamlit
 pandas
 plotly
 supabase
-geopandas
-fiona
-pyproj
+pyshp
+shapely
