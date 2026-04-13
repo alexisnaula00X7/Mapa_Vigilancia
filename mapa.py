@@ -1,8 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import json
-import os
+import geopandas as gpd
 from supabase import create_client, Client
 
 # --- 1. CONFIGURACIÓN E INTERFAZ ---
@@ -16,7 +15,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. CONEXIÓN Y CARGA ---
+# --- 2. CONEXIÓN Y CARGA DE DATOS ---
 @st.cache_resource
 def init_connection():
     try:
@@ -24,29 +23,28 @@ def init_connection():
         key = st.secrets["SUPABASE_KEY"]
         return create_client(url, key)
     except Exception:
-        st.error("Error en las credenciales de Supabase. Revisa los Secrets.")
+        st.error("Error en las credenciales de Supabase.")
         return None
 
 supabase = init_connection()
 
 @st.cache_data(ttl=600)
-def cargar_todo():
-    # Carga desde Supabase
+def cargar_datos_db():
     res = supabase.table("registro_resistencia").select("*").execute()
-    df = pd.DataFrame(res.data)
-    
-    # Carga del GeoJSON local (CORREGIDO EL NOMBRE)
-    ruta_geojson = "ec-allgeo.json" 
-    if os.path.exists(ruta_geojson):
-        with open(ruta_geojson, "r", encoding="utf-8") as f:
-            geojson = json.load(f)
-    else:
-        st.error(f"No se encontró el archivo {ruta_geojson}")
-        geojson = None
-        
-    return df, geojson
+    return pd.DataFrame(res.data)
 
-df_raw, geojson_ecuador = cargar_todo()
+@st.cache_resource
+def cargar_mapa_oficial():
+    # Cargamos el archivo .shp que subiste
+    # GeoPandas lee automáticamente los archivos .dbf y .shx asociados
+    gdf = gpd.read_file("nxprovincias.shp")
+    
+    # IMPORTANTE: Convertir a coordenadas geográficas (WGS84) para Plotly
+    gdf = gdf.to_crs(epsg=4326)
+    return gdf
+
+df_raw = cargar_datos_db()
+mapa_gdf = cargar_mapa_oficial()
 
 # --- 3. BARRA SUPERIOR DE FILTROS ---
 st.title("📊 Vigilancia Epidemiológica de Resistencia")
@@ -86,17 +84,17 @@ with c4:
 
 # --- 4. LÓGICA DE FILTRADO ---
 df = df_raw.copy()
-df = df[df[atb_sel].notnull()] # Solo registros con resultado para este ATB
+df = df[df[atb_sel].notnull()]
 
 if prov_sel != "Todas":
     df = df[df['provincia'] == prov_sel]
 if canton_sel != "Todos":
     df = df[df['canton'] == canton_sel]
 
-# Casos Resistentes para el Mapa de Calor
+# Casos Resistentes para el Mapa
 df_res = df[df[atb_sel].astype(str).str.upper() == 'R'].copy()
 
-# --- 5. INDICADORES RÁPIDOS ---
+# --- 5. INDICADORES ---
 m1, m2, m3, m4 = st.columns(4)
 total_muestras = len(df)
 total_res = len(df_res)
@@ -109,44 +107,42 @@ m4.metric("Microorganismo Top", df_res['microorganismo'].mode()[0] if not df_res
 
 st.divider()
 
-# --- 6. MAPA Y TABLA ---
+# --- 6. MAPA DE CALOR Y TABLA ---
 col_mapa, col_tabla = st.columns([2, 1])
 
 with col_mapa:
-    if geojson_ecuador:
-        # Agrupamos por provincia para contar cuántos "R" hay en cada una
-        # Forzamos formato Título (Guayas, Pichincha) para coincidir con el GeoJSON
-        df_mapa = df_res.copy()
-        df_mapa['provincia_id'] = df_mapa['provincia'].str.strip().str.title()
-        
-        conteo_prov = df_mapa.groupby('provincia_id').size().reset_index(name='conteo')
+    # Agrupamos datos de la DB
+    df_mapa = df_res.groupby('provincia').size().reset_index(name='conteo')
+    
+    # Normalización para el SHP:
+    # En nxprovincias.shp, la columna suele llamarse 'DPA_DESPRO' o 'NAME_1'
+    # Ajustamos tu columna 'provincia' para que coincida (usualmente MAYÚSCULAS)
+    df_mapa['provincia_id'] = df_mapa['provincia'].str.strip().str.upper()
 
-        fig = px.choropleth_mapbox(
-            conteo_prov,
-            geojson=geojson_ecuador,
-            locations='provincia_id',
-            featureidkey='properties.name', # Verifica que en tu JSON la llave sea 'name'
-            color='conteo',
-            color_continuous_scale="YlOrRd", # Escala Amarillo-Naranja-Rojo
-            mapbox_style="carto-positron",
-            center={"lat": -1.8, "lon": -78.5},
-            zoom=5.5,
-            opacity=0.7,
-            title=f"Distribución Geográfica de Resistencia: {atb_sel.replace('_', ' ').title()}"
-        )
-        fig.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.error("Error al cargar el mapa (archivo JSON no disponible).")
+    fig = px.choropleth_mapbox(
+        df_mapa,
+        geojson=mapa_gdf.__geo_interface__,
+        locations='provincia_id',
+        featureidkey='properties.DPA_DESPRO', # ESTA ES LA LLAVE EN EL SHP OFICIAL
+        color='conteo',
+        color_continuous_scale="YlOrRd",
+        mapbox_style="carto-positron",
+        center={"lat": -1.8, "lon": -78.5},
+        zoom=5.6,
+        opacity=0.7,
+        title=f"Mapa de Calor: Resistencia a {atb_sel.replace('_', ' ').title()}"
+    )
+    fig.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
+    st.plotly_chart(fig, use_container_width=True)
 
 with col_tabla:
-    st.subheader("📋 Resumen Microbiano (Resistentes)")
+    st.subheader("📋 Detalle Microbiano")
     if not df_res.empty:
-        resumen_micro = df_res['microorganismo'].value_counts().reset_index()
-        resumen_micro.columns = ['Microorganismo', 'Casos R']
-        st.dataframe(resumen_micro, use_container_width=True, hide_index=True)
+        resumen = df_res['microorganismo'].value_counts().reset_index()
+        resumen.columns = ['Microorganismo', 'Casos R']
+        st.dataframe(resumen, use_container_width=True, hide_index=True)
     else:
-        st.info("Sin casos resistentes detectados.")
+        st.info("Sin casos resistentes.")
 
 # --- 7. TABLA DETALLADA ---
 with st.expander("🔍 Ver registros detallados"):
