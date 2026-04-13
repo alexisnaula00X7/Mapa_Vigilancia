@@ -59,7 +59,7 @@ if df_raw.empty:
 
 c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
 
-with c1:
+with c3:
     antibioticos = [
         'ampicilina_sulbactam', 'cefalotina', 'cefazolina', 'ceftazidima', 
         'ceftriaxona', 'cefepima', 'ertapenem', 'meropenem', 'amicacina', 
@@ -68,11 +68,11 @@ with c1:
     ]
     atb_sel = st.selectbox("💊 Antibiótico", antibioticos)
 
-with c2:
+with c1:
     provincias = ["Todas"] + sorted(df_raw['provincia'].unique().tolist())
     prov_sel = st.selectbox("📍 Provincia", provincias)
 
-with c3:
+with c2:
     if prov_sel != "Todas":
         df_prov = df_raw[df_raw['provincia'] == prov_sel]
         cantones = ["Todos"] + sorted(df_prov['canton'].unique().tolist())
