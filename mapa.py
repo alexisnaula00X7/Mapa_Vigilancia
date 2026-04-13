@@ -89,8 +89,9 @@ st.title("🧪 Vigilancia Epidemiológica de Resistencia (RAM)")
 with st.sidebar:
     st.header("⚙️ Configuración")
     micro_sel = st.selectbox("🦠 Microorganismo", ["Todas"] + sorted(df_raw['microorganismo'].unique().tolist()))
-    atb_sel = st.selectbox("💊 Antibiótico", ["Todas"] + antibioticos)
-    
+    opciones_atb = ["TODOS"] + antibioticos_base
+    atb_sel = st.selectbox("💊 Antibiótico", opciones_atb)
+        
     st.divider()
     prov_sel = st.selectbox("📍 Filtrar Provincia", ["Todas"] + sorted(df_raw['provincia'].unique().tolist()))
     
