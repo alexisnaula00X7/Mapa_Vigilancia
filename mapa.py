@@ -26,7 +26,7 @@ supabase = init_connection()
 @st.cache_resource
 def cargar_mapa_final():
     # Intento 1: Cargar el Shapefile oficial
-    if os.path.exists("nxprovincias.shp"):
+    if os.path.exists("gadm41_ECU_1.shp"):
         try:
             # Usamos engine="fiona" para evitar el error de pyogrio
             gdf = gpd.read_file("nxprovincias.shp", engine="fiona")
@@ -36,8 +36,8 @@ def cargar_mapa_final():
             st.warning(f"Error técnico con SHP, intentando GeoJSON... ({e})")
     
     # Intento 2: Si falla el SHP o no existe, usamos el GeoJSON
-    if os.path.exists("ec-all.geo.json"):
-        with open("ec-all.geo.json", "r", encoding="utf-8") as f:
+    if os.path.exists("ec-allgeo.json"):
+        with open("ec-allgeo.json", "r", encoding="utf-8") as f:
             return json.load(f), "name"
     
     return None, None
