@@ -31,31 +31,21 @@ supabase = init_connection()
 
 @st.cache_data(ttl=600)
 def cargar_todo():
-    # Carga desde Supabase
     res = supabase.table("registro_resistencia").select("*").execute()
     df = pd.DataFrame(res.data)
     
-    # Carga del GeoJSON local
     ruta_geojson = "ec-allgeo.json" 
     if os.path.exists(ruta_geojson):
         with open(ruta_geojson, "r", encoding="utf-8") as f:
             geojson = json.load(f)
     else:
-        st.error(f"No se encontró el archivo {ruta_geojson}")
         geojson = None
         
     return df, geojson
 
 df_raw, geojson_ecuador = cargar_todo()
 
-# --- 3. BARRA SUPERIOR DE FILTROS ---
-st.title("📊 Vigilancia Epidemiológica de Resistencia")
-
-if df_raw.empty:
-    st.warning("La base de datos está vacía.")
-    st.stop()
-
-# Definición de antibióticos (Lista base)
+# --- 3. CONFIGURACIÓN DE ANTIBIÓTICOS ---
 antibioticos_base = [
     'ampicilina_sulbactam', 'cefalotina', 'cefazolina', 'ceftazidima', 
     'ceftriaxona', 'cefepima', 'ertapenem', 'meropenem', 'amicacina', 
@@ -63,79 +53,87 @@ antibioticos_base = [
     'nitrofurantoina', 'trimetoprim_sulfametoxazol'
 ]
 
+# --- 4. BARRA SUPERIOR DE FILTROS ---
+st.title("📊 Vigilancia Epidemiológica de Resistencia")
+
+if df_raw.empty:
+    st.warning("La base de datos está vacía.")
+    st.stop()
+
 c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
 
 with c3:
-    # Añadimos la opción "TODOS"
-    opciones_atb = ["TODOS"] + antibioticos_base
-    atb_sel = st.selectbox("💊 Antibiótico", opciones_atb)
+    atb_sel = st.selectbox("💊 Antibiótico (para el mapa)", ["TODOS"] + antibioticos_base)
 
 with c1:
     provincias = ["Todas"] + sorted(df_raw['provincia'].unique().tolist())
     prov_sel = st.selectbox("📍 Provincia", provincias)
 
 with c2:
-    if prov_sel != "Todas":
-        df_prov = df_raw[df_raw['provincia'] == prov_sel]
-        cantones = ["Todos"] + sorted(df_prov['canton'].unique().tolist())
-    else:
-        cantones = ["Todos"] + sorted(df_raw['canton'].unique().tolist())
-    canton_sel = st.selectbox("🏙️ Cantón", cantones)
+    microorganismos = sorted(df_raw['microorganismo'].unique().tolist())
+    micro_sel = st.selectbox("🦠 Microorganismo", microorganismos)
 
-with c4:
-    st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("🔄 Actualizar", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
+# --- 5. LÓGICA DE FILTRADO ---
+df_f = df_raw[df_raw['microorganismo'] == micro_sel].copy()
 
-# --- 4. LÓGICA DE FILTRADO ---
-df = df_raw.copy()
-
-# Filtrar por ubicación primero
 if prov_sel != "Todas":
-    df = df[df['provincia'] == prov_sel]
-if canton_sel != "Todos":
-    df = df[df['canton'] == canton_sel]
+    df_f = df_f[df_f['provincia'] == prov_sel]
 
-# Lógica especial para detectar casos resistentes (R)
+# Para el mapa de calor
 if atb_sel == "TODOS":
-    # Es resistente si tiene al menos una 'R' en cualquiera de las columnas de la lista
-    df_res = df[df[antibioticos_base].astype(str).apply(lambda x: x.str.upper()).eq('R').any(axis=1)].copy()
-    total_muestras_atb = len(df) # En "TODOS" comparamos contra el total
+    df_res_mapa = df_f[df_f[antibioticos_base].astype(str).apply(lambda x: x.str.upper()).eq('R').any(axis=1)].copy()
 else:
-    # Filtro normal para un antibiótico específico
-    df = df[df[atb_sel].notnull()]
-    df_res = df[df[atb_sel].astype(str).str.upper() == 'R'].copy()
-    total_muestras_atb = len(df)
+    df_res_mapa = df_f[df_f[atb_sel].astype(str).str.upper() == 'R'].copy()
 
-# --- 5. INDICADORES RÁPIDOS ---
-m1, m2, m3, m4 = st.columns(4)
-total_muestras = total_muestras_atb
-total_res = len(df_res)
+# --- 6. INDICADORES RÁPIDOS ---
+m1, m2, m3 = st.columns(3)
+total_muestras = len(df_f)
+total_res = len(df_res_mapa)
 porcentaje = (total_res / total_muestras * 100) if total_muestras > 0 else 0
 
-m1.metric("Muestras Analizadas", total_muestras)
-m2.metric("Casos Resistentes (R)", total_res)
+m1.metric("Aislamientos Totales", total_muestras)
+m2.metric("Casos Resistentes (Filtro)", total_res)
 m3.metric("% Resistencia", f"{porcentaje:.1f}%")
-
-# Evitar error si no hay microorganismos resistentes
-top_micro = df_res['microorganismo'].mode()[0] if not df_res.empty else "N/A"
-m4.metric("Microorganismo Top", top_micro)
 
 st.divider()
 
-# --- 6. MAPA Y TABLA ---
+# --- 7. GRÁFICA SOLICITADA: PERFIL DE RESISTENCIA POR ANTIBIÓTICO ---
+st.subheader(f"📈 Perfil de Resistencia: {micro_sel} en {prov_sel}")
+
+# Calculamos la cantidad de 'R' para cada antibiótico en los datos filtrados
+conteo_resistencia = []
+for atb in antibioticos_base:
+    if atb in df_f.columns:
+        n_resistentes = df_f[df_f[atb].astype(str).str.upper() == 'R'].shape[0]
+        conteo_resistencia.append({'Antibiótico': atb.replace('_', ' ').title(), 'Cantidad R': n_resistentes})
+
+df_grafica = pd.DataFrame(conteo_resistencia).sort_values('Cantidad R', ascending=True)
+
+fig_barras = px.bar(
+    df_grafica, 
+    x='Cantidad R', 
+    y='Antibiótico', 
+    orientation='h',
+    color='Cantidad R',
+    color_continuous_scale='Reds',
+    text='Cantidad R',
+    labels={'Cantidad R': 'Número de Aislamientos Resistentes'}
+)
+fig_barras.update_layout(showlegend=False, height=500)
+st.plotly_chart(fig_barras, use_container_width=True)
+
+st.divider()
+
+# --- 8. MAPA Y TABLA ---
 col_mapa, col_tabla = st.columns([2, 1])
 
 with col_mapa:
     if geojson_ecuador:
-        df_mapa = df_res.copy()
-        # Normalización para el Join con GeoJSON (Título y sin espacios extra)
+        df_mapa = df_res_mapa.copy()
         df_mapa['provincia_id'] = df_mapa['provincia'].str.strip().str.title()
-        
         conteo_prov = df_mapa.groupby('provincia_id').size().reset_index(name='conteo')
 
-        fig = px.choropleth_mapbox(
+        fig_map = px.choropleth_mapbox(
             conteo_prov,
             geojson=geojson_ecuador,
             locations='provincia_id',
@@ -146,22 +144,14 @@ with col_mapa:
             center={"lat": -1.8, "lon": -78.5},
             zoom=5.5,
             opacity=0.7,
-            title=f"Casos Resistentes: {atb_sel.replace('_', ' ').title()}"
+            title=f"Distribución Geográfica: {atb_sel}"
         )
-        fig.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.error("Archivo de mapa no disponible.")
+        fig_map.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
+        st.plotly_chart(fig_map, use_container_width=True)
 
 with col_tabla:
-    st.subheader("📋 Top Microorganismos (R)")
-    if not df_res.empty:
-        resumen_micro = df_res['microorganismo'].value_counts().reset_index()
-        resumen_micro.columns = ['Microorganismo', 'Casos R']
-        st.dataframe(resumen_micro, use_container_width=True, hide_index=True)
-    else:
-        st.info("Sin casos resistentes.")
-
-# --- 7. TABLA DETALLADA ---
-with st.expander("🔍 Ver registros detallados"):
-    st.dataframe(df, use_container_width=True)
+    st.subheader("📋 Resumen por Cantón (R)")
+    if not df_res_mapa.empty:
+        resumen_canton = df_res_mapa['canton'].value_counts().reset_index()
+        resumen_canton.columns = ['Cantón', 'Casos R']
+        st.dataframe(resumen_canton, use_container_width=True, hide_index=True)
