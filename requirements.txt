@@ -1,7 +1,7 @@
 streamlit
 pandas
-supabase
 plotly
-requests
-geopandas 
+supabase
+geopandas
+fiona
 pyproj
