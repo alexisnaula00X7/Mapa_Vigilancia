@@ -8,12 +8,13 @@ from supabase import create_client, Client
 # --- 1. CONFIGURACIÓN E INTERFAZ ---
 st.set_page_config(page_title="LIMS - Dashboard Epidemiológico", layout="wide")
 
-# Estilo personalizado para indicadores y fondo
 st.markdown("""
     <style>
     .main { background-color: #f5f7f9; }
     div.block-container { padding-top: 2rem; }
-    [data-testid="stMetricValue"] { font-size: 1.8rem; font-weight: bold; }
+    [data-testid="stMetricValue"] { font-size: 1.6rem; font-weight: bold; }
+    /* Estilo para la barra lateral */
+    [data-testid="stSidebar"] { background-color: #1e2630; color: white; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -21,7 +22,6 @@ st.markdown("""
 @st.cache_resource
 def init_connection():
     try:
-        # Uso de secrets para conexión segura con Supabase
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_KEY"]
         return create_client(url, key)
@@ -32,11 +32,8 @@ supabase = init_connection()
 
 @st.cache_data(ttl=600)
 def cargar_todo():
-    # Obtención de registros de resistencia desde la base de datos
     res = supabase.table("registro_resistencia").select("*").execute()
     df = pd.DataFrame(res.data)
-    
-    # Carga de cartografía local
     ruta_geojson = "ec-allgeo.json" 
     geojson = None
     if os.path.exists(ruta_geojson):
@@ -47,7 +44,6 @@ def cargar_todo():
 df_raw, geojson_ecuador = cargar_todo()
 
 # --- 3. CONFIGURACIÓN DE ANTIBIÓTICOS ---
-# Lista basada en los parámetros del laboratorio
 antibioticos_base = [
     'ampicilina_sulbactam', 'cefalotina', 'cefazolina', 'ceftazidima', 
     'ceftriaxona', 'cefepima', 'ertapenem', 'meropenem', 'amicacina', 
@@ -55,35 +51,30 @@ antibioticos_base = [
     'nitrofurantoina', 'trimetoprim_sulfametoxazol'
 ]
 
-# --- 4. BARRA DE FILTROS ---
-st.title("📊 Vigilancia Epidemiológica de Resistencia")
-
-c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
-
-with c1:
+# --- 4. BARRA LATERAL (FILTROS AL LADO IZQUIERDO) ---
+with st.sidebar:
+    st.header("🔍 Filtros de Búsqueda")
+    
     provincias = ["Todas"] + sorted(df_raw['provincia'].unique().tolist())
-    prov_sel = st.selectbox("📍 Provincia", provincias)
+    prov_sel = st.selectbox("📍 Seleccionar Provincia", provincias)
 
-with c2:
-    # Filtro de cantones dependiente de la provincia seleccionada
     if prov_sel != "Todas":
         cantones_lista = ["Todos"] + sorted(df_raw[df_raw['provincia'] == prov_sel]['canton'].unique().tolist())
     else:
         cantones_lista = ["Todos"] + sorted(df_raw['canton'].unique().tolist())
-    canton_sel = st.selectbox("🏙️ Cantón", cantones_lista)
+    canton_sel = st.selectbox("🏙️ Seleccionar Cantón", cantones_lista)
 
-with c3:
     micro_list = sorted(df_raw['microorganismo'].unique().tolist())
-    micro_sel = st.selectbox("🦠 Microorganismo", micro_list)
+    micro_sel = st.selectbox("🦠 Seleccionar Microorganismo", micro_list)
 
-with c4:
     atb_sel = st.selectbox("💊 Antibiótico (Mapa)", ["TODOS"] + antibioticos_base)
-    if st.button("🔄 Actualizar", use_container_width=True):
+    
+    st.markdown("---")
+    if st.button("🔄 Actualizar Tablero", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
 # --- 5. LÓGICA DE FILTRADO ---
-# Filtrado por microorganismo y ubicación
 df_f = df_raw[df_raw['microorganismo'] == micro_sel].copy()
 
 if prov_sel != "Todas":
@@ -91,72 +82,73 @@ if prov_sel != "Todas":
 if canton_sel != "Todos":
     df_f = df_f[df_f['canton'] == canton_sel]
 
-# Identificación de casos con resultado 'R' (Resistente)
 if atb_sel == "TODOS":
     mask_r = df_f[antibioticos_base].astype(str).apply(lambda x: x.str.upper()).eq('R').any(axis=1)
     df_res_mapa = df_f[mask_r].copy()
 else:
     df_res_mapa = df_f[df_f[atb_sel].astype(str).str.upper() == 'R'].copy()
 
-# --- 6. GRÁFICA DE BARRAS SOLICITADA ---
-# Traducción de la lógica ggplot2 de R a Plotly Python
-st.subheader(f"Número de resistencias - {prov_sel} - {micro_sel}")
+# --- 6. CUERPO PRINCIPAL ---
+st.title("📊 Vigilancia Epidemiológica de Resistencia")
 
-conteo_data = []
-for atb in antibioticos_base:
-    if atb in df_f.columns:
-        # Equivalente al sum(x == "R") de RStudio
-        n_r = (df_f[atb].astype(str).str.upper() == "R").sum()
-        conteo_data.append({'antibiotico': atb.replace('_', ' ').title(), 'resistencias': n_r})
-
-df_plot = pd.DataFrame(conteo_data)
-
-if not df_plot.empty and df_plot['resistencias'].sum() > 0:
-    fig_res = px.bar(
-        df_plot,
-        x='resistencias',
-        y='antibiotico',
-        orientation='h',
-        color='resistencias',
-        # Gradiente equivalente a scale_fill_gradient(low="green", high="red")
-        color_continuous_scale=['#32CD32', '#FFD700', '#FF0000'],
-        labels={'resistencias': 'Número de aislamientos resistentes', 'antibiotico': 'Antibiótico'},
-        # Equivalente al reorder() de ggplot2
-        category_orders={"antibiotico": df_plot.sort_values('resistencias')['antibiotico'].tolist()}
-    )
-
-    fig_res.update_layout(
-        plot_bgcolor='white',
-        xaxis=dict(showgrid=True, gridcolor='lightgrey'),
-        yaxis=dict(showgrid=False),
-        height=550,
-        margin=dict(l=20, r=20, t=30, b=20)
-    )
-    
-    fig_res.update_traces(texttemplate='%{x}', textposition='outside', marker_line_color='grey', marker_line_width=0.5)
-    st.plotly_chart(fig_res, use_container_width=True)
-else:
-    st.info(f"No se detectaron aislamientos resistentes para {micro_sel} en esta selección.")
-
-st.divider()
-
-# --- 7. INDICADORES RÁPIDOS (KPIs) ---
+# KPIs en la parte superior
 m1, m2, m3, m4 = st.columns(4)
 total_muestras = len(df_f)
 total_res = len(df_res_mapa)
 porc = (total_res / total_muestras * 100) if total_muestras > 0 else 0
 
-m1.metric("Muestras Analizadas", total_muestras)
-m2.metric("Casos Resistentes (R)", total_res)
+m1.metric("Muestras", total_muestras)
+m2.metric("Casos R", total_res)
 m3.metric("% Resistencia", f"{porc:.1f}%")
 m4.metric("Microorganismo", micro_sel)
 
 st.divider()
 
-# --- 8. MAPA Y TABLA DE DETALLES ---
-col_mapa, col_tabla = st.columns([2, 1])
+# --- 7. GRÁFICA DE BARRAS (SIEMPRE VISIBLE) ---
+st.subheader(f"Número de resistencias - {prov_sel} - {micro_sel}")
 
-with col_mapa:
+conteo_data = []
+for atb in antibioticos_base:
+    if atb in df_f.columns:
+        n_r = (df_f[atb].astype(str).str.upper() == "R").sum()
+        conteo_data.append({'antibiotico': atb.replace('_', ' ').title(), 'resistencias': n_r})
+
+df_plot = pd.DataFrame(conteo_data)
+
+# Ordenamos para asegurar que el reorder funcione siempre
+df_plot = df_plot.sort_values('resistencias', ascending=True)
+
+fig_res = px.bar(
+    df_plot,
+    x='resistencias',
+    y='antibiotico',
+    orientation='h',
+    color='resistencias',
+    color_continuous_scale=['#32CD32', '#FFD700', '#FF0000'],
+    labels={'resistencias': 'Número de aislamientos resistentes', 'antibiotico': 'Antibiótico'},
+    text='resistencias'
+)
+
+fig_res.update_layout(
+    plot_bgcolor='white',
+    xaxis=dict(showgrid=True, gridcolor='lightgrey', title="Aislamientos Resistentes"),
+    yaxis=dict(showgrid=False),
+    height=600,
+    margin=dict(l=20, r=20, t=30, b=20),
+    coloraxis_showscale=False # Ocultamos la barra lateral de color para que se vea más limpio
+)
+
+fig_res.update_traces(textposition='outside', marker_line_color='grey', marker_line_width=0.5)
+
+# Se muestra la gráfica incluso si los valores son 0
+st.plotly_chart(fig_res, use_container_width=True)
+
+st.divider()
+
+# --- 8. MAPA Y TABLA ---
+col_map, col_tbl = st.columns([2, 1])
+
+with col_map:
     if geojson_ecuador:
         df_mapa = df_res_mapa.copy()
         df_mapa['provincia_id'] = df_mapa['provincia'].str.strip().str.title()
@@ -172,11 +164,11 @@ with col_mapa:
         fig_map.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
         st.plotly_chart(fig_map, use_container_width=True)
 
-with col_tabla:
-    st.subheader("📋 Top Cantones (R)")
+with col_tbl:
+    st.subheader("📋 Detalle por Cantón")
     if not df_res_mapa.empty:
         res_c = df_res_mapa['canton'].value_counts().reset_index()
         res_c.columns = ['Cantón', 'Casos R']
         st.dataframe(res_c, use_container_width=True, hide_index=True)
     else:
-        st.info("Sin registros coincidentes.")
+        st.info("Sin registros con 'R' para esta selección.")
