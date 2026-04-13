@@ -8,24 +8,28 @@ from supabase import create_client, Client
 # --- 1. CONFIGURACIÓN E INTERFAZ ---
 st.set_page_config(page_title="LIMS - Dashboard Epidemiológico", layout="wide")
 
+# CSS para imitar el estilo de tu imagen (letras blancas/naranjas y subrayado rojo)
 st.markdown("""
     <style>
-    .main { background-color: #0e1117; color: white; }
-    div.block-container { padding-top: 2rem; }
-    [data-testid="stMetricValue"] { font-size: 1.6rem; font-weight: bold; }
-    [data-testid="stSidebar"] { background-color: #1e2630; color: white; }
-    /* Estilo para resaltar las pestañas */
-    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
+    .main { background-color: #0e1117; }
+    div.block-container { padding-top: 1rem; }
+    
+    /* Estilo de las pestañas (Tabs) */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 20px;
+        background-color: transparent;
+    }
     .stTabs [data-baseweb="tab"] {
-        height: 45px;
-        background-color: #262730;
-        border-radius: 4px 4px 0px 0px;
-        color: #afb1b6;
-        padding: 10px 20px;
+        height: 40px;
+        background-color: transparent;
+        border: none;
+        color: #ffffff;
+        font-family: sans-serif;
+        font-weight: 400;
     }
     .stTabs [aria-selected="true"] {
-        background-color: #ff4b4b !important;
-        color: white !important;
+        color: #ff4b4b !important; /* Color de texto activo */
+        border-bottom: 2px solid #ff4b4b !important; /* Línea roja inferior */
     }
     </style>
     """, unsafe_allow_html=True)
@@ -63,129 +67,92 @@ antibioticos_base = [
     'nitrofurantoina', 'trimetoprim_sulfametoxazol'
 ]
 
-# --- 4. FILTROS (BARRA LATERAL IZQUIERDA) ---
+# --- 4. TÍTULO Y PESTAÑAS (COMO EN TU IMAGEN) ---
+st.title("🧪 Vigilancia Epidemiológica de Resistencia")
+
+# Definición de pestañas con iconos
+tab_ingresos, tab_procesados, tab_resumen, tab_avanzado = st.tabs([
+    "📥 Ingresos", 
+    "⚙️ Procesados", 
+    "📊 Resumen General", 
+    "📈 Análisis Avanzado"
+])
+
+# --- 5. FILTROS (MANTENEMOS EN SIDEBAR PARA LIMPIEZA) ---
 with st.sidebar:
-    st.header("🔍 Filtros de Control")
+    st.header("Filtros")
+    prov_sel = st.selectbox("📍 Provincia", ["Todas"] + sorted(df_raw['provincia'].unique().tolist()))
     
-    provincias = ["Todas"] + sorted(df_raw['provincia'].unique().tolist())
-    prov_sel = st.selectbox("📍 Provincia", provincias)
-
     if prov_sel != "Todas":
-        cantones_lista = ["Todos"] + sorted(df_raw[df_raw['provincia'] == prov_sel]['canton'].unique().tolist())
+        cantones = ["Todos"] + sorted(df_raw[df_raw['provincia'] == prov_sel]['canton'].unique().tolist())
     else:
-        cantones_lista = ["Todos"] + sorted(df_raw['canton'].unique().tolist())
-    canton_sel = st.selectbox("🏙️ Cantón", cantones_lista)
-
-    micro_list = sorted(df_raw['microorganismo'].unique().tolist())
-    micro_sel = st.selectbox("🦠 Microorganismo", micro_list)
-
-    atb_sel = st.selectbox("💊 Antibiótico para Mapa", ["TODOS"] + antibioticos_base)
+        cantones = ["Todos"] + sorted(df_raw['canton'].unique().tolist())
+    canton_sel = st.selectbox("🏙️ Cantón", cantones)
     
-    st.markdown("---")
-    if st.button("🔄 Actualizar Tablero", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
+    micro_sel = st.selectbox("🦠 Microorganismo", sorted(df_raw['microorganismo'].unique().tolist()))
+    atb_sel = st.selectbox("💊 Antibiótico (Mapa)", ["TODOS"] + antibioticos_base)
 
-# --- 5. LÓGICA DE FILTRADO ---
+# Lógica de datos filtrados
 df_f = df_raw[df_raw['microorganismo'] == micro_sel].copy()
-if prov_sel != "Todas":
-    df_f = df_f[df_f['provincia'] == prov_sel]
-if canton_sel != "Todos":
-    df_f = df_f[df_f['canton'] == canton_sel]
+if prov_sel != "Todas": df_f = df_f[df_f['provincia'] == prov_sel]
+if canton_sel != "Todos": df_f = df_f[df_f['canton'] == canton_sel]
 
-# Filtrado para Casos Resistentes (R)
-if atb_sel == "TODOS":
-    mask_r = df_f[antibioticos_base].astype(str).apply(lambda x: x.str.upper()).eq('R').any(axis=1)
-    df_res_mapa = df_f[mask_r].copy()
-else:
-    df_res_mapa = df_f[df_f[atb_sel].astype(str).str.upper() == 'R'].copy()
+mask_r = df_f[antibioticos_base].astype(str).apply(lambda x: x.str.upper()).eq('R').any(axis=1)
+df_res = df_f[mask_r].copy()
 
-# --- 6. CUERPO PRINCIPAL ---
-st.title("📊 Vigilancia Epidemiológica de Resistencia")
+# --- 6. CONTENIDO DE LAS PESTAÑAS ---
 
-# KPIs de resumen (Siempre visibles)
-m1, m2, m3, m4 = st.columns(4)
-total_m = len(df_f)
-total_r = len(df_res_mapa)
-perc = (total_r / total_m * 100) if total_m > 0 else 0
+with tab_ingresos:
+    st.subheader("Datos de Ingreso de Muestras")
+    st.dataframe(df_f, use_container_width=True)
 
-m1.metric("Muestras Analizadas", total_m)
-m2.metric("Casos Resistentes (R)", total_r)
-m3.metric("% Resistencia", f"{perc:.1f}%")
-m4.metric("Microorganismo", micro_sel)
+with tab_procesados:
+    st.subheader("Estado de Procesamiento")
+    # Aquí puedes poner tablas de eficiencia o estados
+    st.info("Sección configurada para mostrar tiempos de respuesta y estados de laboratorio.")
 
-st.divider()
+with tab_resumen:
+    # KPIs Rápidos
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Muestras Total", len(df_f))
+    c2.metric("Casos Resistentes", len(df_res))
+    c3.metric("% Resistencia", f"{(len(df_res)/len(df_f)*100):.1f}%" if len(df_f)>0 else "0%")
+    
+    st.divider()
+    
+    col_map, col_top = st.columns([2, 1])
+    with col_map:
+        if geojson_ecuador:
+            df_mapa = df_res.copy()
+            df_mapa['provincia_id'] = df_mapa['provincia'].str.strip().str.title()
+            conteo = df_mapa.groupby('provincia_id').size().reset_index(name='n')
+            fig = px.choropleth_mapbox(conteo, geojson=geojson_ecuador, locations='provincia_id',
+                                      featureidkey='properties.name', color='n',
+                                      mapbox_style="carto-positron", center={"lat": -1.8, "lon": -78.5},
+                                      zoom=5, color_continuous_scale="Reds")
+            fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
+            st.plotly_chart(fig, use_container_width=True)
+            
+    with col_top:
+        st.subheader("📋 Top Microorganismos (R)")
+        if not df_res.empty:
+            st.dataframe(df_res['microorganismo'].value_counts(), use_container_width=True)
+        else:
+            st.write("Sin casos resistentes.")
 
-# --- 7. ESTRUCTURA DE PESTAÑAS (TABS) ---
-tab1, tab2, tab3 = st.tabs(["📈 Gráfica de Resistencias", "🗺️ Mapa Geográfico", "📋 Reportes y Tops"])
-
-# --- PESTAÑA 1: GRÁFICA ---
-with tab1:
-    st.subheader(f"Perfil de Resistencia - {prov_sel} - {micro_sel}")
+with tab_avanzado:
+    st.subheader(f"Perfil de Resistencia: {micro_sel}")
     
     conteo_data = []
     for atb in antibioticos_base:
         if atb in df_f.columns:
             n_r = (df_f[atb].astype(str).str.upper() == "R").sum()
-            conteo_data.append({
-                'antibiotico': atb.replace('_', ' ').title(), 
-                'resistencias': int(n_r)
-            })
-
-    df_plot = pd.DataFrame(conteo_data).sort_values('resistencias', ascending=True)
-
-    fig_res = px.bar(
-        df_plot, x='resistencias', y='antibiotico', orientation='h',
-        color='resistencias',
-        color_continuous_scale=['#32CD32', '#FFD700', '#FF0000'],
-        labels={'resistencias': 'Aislamientos Resistentes', 'antibiotico': 'Antibiótico'},
-        text='resistencias'
-    )
-    fig_res.update_layout(plot_bgcolor='rgba(0,0,0,0)', height=600, coloraxis_showscale=False)
-    fig_res.update_traces(textposition='outside')
-    st.plotly_chart(fig_res, use_container_width=True)
-
-# --- PESTAÑA 2: MAPA ---
-with tab2:
-    st.subheader(f"Distribución Geográfica: {atb_sel}")
-    if geojson_ecuador:
-        df_mapa = df_res_mapa.copy()
-        df_mapa['provincia_id'] = df_mapa['provincia'].str.strip().str.title()
-        conteo_prov = df_mapa.groupby('provincia_id').size().reset_index(name='conteo')
-
-        fig_map = px.choropleth_mapbox(
-            conteo_prov, geojson=geojson_ecuador, locations='provincia_id',
-            featureidkey='properties.name', color='conteo',
-            color_continuous_scale="YlOrRd", mapbox_style="carto-positron",
-            center={"lat": -1.8, "lon": -78.5}, zoom=5.2, opacity=0.7
-        )
-        fig_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=600)
-        st.plotly_chart(fig_map, use_container_width=True)
-    else:
-        st.info("Archivo cartográfico no detectado.")
-
-# --- PESTAÑA 3: REPORTES DETALLADOS ---
-with tab3:
-    c1, c2 = st.columns(2)
+            conteo_data.append({'antibiotico': atb.replace('_', ' ').title(), 'resistencias': int(n_r)})
     
-    with c1:
-        st.subheader("🏙️ Top Cantones (R)")
-        if not df_res_mapa.empty:
-            res_c = df_res_mapa['canton'].value_counts().reset_index()
-            res_c.columns = ['Cantón', 'Casos R']
-            st.dataframe(res_c, use_container_width=True, hide_index=True, height=350)
-        else:
-            st.info("Sin datos para mostrar.")
-
-    with c2:
-        st.subheader("💊 Top Antibióticos (R)")
-        if not df_plot.empty:
-            top_atb = df_plot.sort_values('resistencias', ascending=False).copy()
-            top_atb.columns = ['Antibiótico', 'Casos R']
-            st.dataframe(top_atb, use_container_width=True, hide_index=True, height=350)
-        else:
-            st.info("Sin datos para mostrar.")
-            
-    st.markdown("---")
-    st.subheader("📋 Base de Datos Filtrada")
-    st.dataframe(df_f, use_container_width=True)
+    df_plot = pd.DataFrame(conteo_data).sort_values('resistencias', ascending=True)
+    
+    fig_bar = px.bar(df_plot, x='resistencias', y='antibiotico', orientation='h',
+                     color='resistencias', color_continuous_scale=['#32CD32', '#FFD700', '#FF0000'],
+                     text='resistencias')
+    fig_bar.update_layout(plot_bgcolor='rgba(0,0,0,0)', height=600, coloraxis_showscale=False)
+    st.plotly_chart(fig_bar, use_container_width=True)
