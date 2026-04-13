@@ -3,3 +3,5 @@ pandas
 supabase
 plotly
 requests
+geopandas 
+pyproj
