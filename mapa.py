@@ -2,104 +2,116 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import requests
-import json
+from supabase import create_client, Client
 
 # --- 1. CONFIGURACIÓN DE LA PÁGINA ---
-st.set_page_config(page_title="Mapa Coroplético de Muestras", layout="wide")
-st.title("🗺️ Distribución Geográfica de Muestras Tomadas")
+st.set_page_config(page_title="Vigilancia Epidemiológica Ecuador", layout="wide")
 
-# --- 2. CARGA DE DATOS (MUESTRAS) ---
-@st.cache_data(ttl=600)  # Caché de 10 min
-def cargar_datos_muestras():
-    """
-    IMPORTANTE: Reemplaza esto con tu consulta real a Supabase.
-    Si usas el script anterior, sería:
-    # res = supabase.table("registro_resistencia").select("id, provincia, canton").execute()
-    # return pd.DataFrame(res.data)
-    """
-    # DATOS DE PRUEBA (Borrar cuando conectes Supabase)
-    data = {
-        'id': range(1, 101),
-        'provincia': ['PICHINCHA']*40 + ['GUAYAS']*25 + ['MANABI']*15 + ['AZUAY']*10 + ['ESMERALDAS']*5 + ['LOJA']*3 + ['ORELLANA']*2,
-        'canton': ['QUITO']*30 + ['MEJIA']*10 + ['GUAYAQUIL']*20 + ['SAMBORONDON']*5 + ['MANTA']*10 + ['CUENCA']*10 + ['ESMERALDAS']*5 + ['LOJA']*3 + ['ORELLANA']*2
-    }
-    return pd.DataFrame(data)
-
-# --- 3. CARGA DEL MAPA (GEOJSON) ---
+# --- 2. CONEXIÓN A SUPABASE ---
 @st.cache_resource
-def cargar_geojson_provincias():
-    """
-    Descarga un GeoJSON oficial de las provincias de Ecuador.
-    Fuente: https://github.com/andres-torres/ecuador-geojson
-    """
-    url = "https://raw.githubusercontent.com/andres-torres/ecuador-geojson/master/provincias.geojson"
+def init_connection():
     try:
-        response = requests.get(url)
-        geojson = response.json()
-        return geojson
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+        return create_client(url, key)
     except Exception as e:
-        st.error(f"Error al descargar el GeoJSON: {e}")
+        st.error("No se encontraron las credenciales en st.secrets")
         return None
 
-# --- 4. EJECUCIÓN Y PROCESAMIENTO ---
-df_muestras = cargar_datos_muestras()
-geojson_ecuador = cargar_geojson_provincias()
+supabase = init_connection()
 
-# Verificación de datos cargados
-if df_muestras.empty or not geojson_ecuador:
-    st.warning("No se pudieron cargar los datos o el mapa. Revisa las conexiones.")
+# --- 3. CARGA DE DATOS (MUESTRAS Y GEOJSON) ---
+@st.cache_data(ttl=600)
+def cargar_datos_desde_db():
+    try:
+        # Consultamos la tabla (asegúrate que el nombre coincida: registro_resistencia)
+        res = supabase.table("registro_resistencia").select("*").execute()
+        return pd.DataFrame(res.data)
+    except Exception as e:
+        st.error(f"Error al conectar con la tabla: {e}")
+        return pd.DataFrame()
+
+@st.cache_resource
+def cargar_geojson_ecuador():
+    # GeoJSON oficial de provincias de Ecuador
+    url = "https://raw.githubusercontent.com/andres-torres/ecuador-geojson/master/provincias.geojson"
+    return requests.get(url).json()
+
+# --- 4. PROCESAMIENTO ---
+st.title("🧪 Mapa Epidemiológico de Resistencia - Ecuador")
+
+df = cargar_datos_desde_db()
+geojson_ecuador = cargar_geojson_ecuador()
+
+if df.empty:
+    st.info("Esperando datos de la base de datos... Asegúrate de tener registros en la tabla 'registro_resistencia'.")
     st.stop()
 
-# Limpieza de datos (Clave para que coincidan con el mapa)
-# Convertimos a mayúsculas y quitamos espacios para estandarizar
-df_muestras['provincia_id'] = df_muestras['provincia'].str.upper().str.strip()
+# Estandarización de nombres para que coincidan con el mapa
+df['provincia_mapa'] = df['provincia'].str.upper().str.strip()
 
-# --- 5. LÓGICA DEL MAPA ---
-st.sidebar.header("Filtros")
+# --- 5. FILTROS Y LÓGICA DE RESISTENCIA ---
+with st.sidebar:
+    st.header("Configuración del Mapa")
+    
+    # Lista de antibióticos según tu imagen
+    antibioticos = [
+        'ampicilina_sulbactam', 'cefalotina', 'cefazolina', 'ceftazidima', 
+        'ceftriaxona', 'cefepima', 'ertapenem', 'meropenem', 'amicacina', 
+        'gentamicina', 'ciprofloxacino', 'norfloxacino', 'fosfomicina', 
+        'nitrofurantoina', 'trimetoprim_sulfametoxazol'
+    ]
+    
+    atb_sel = st.selectbox("Selecciona Antibiótico para analizar:", antibioticos)
+    ver_solo_resistentes = st.checkbox("Ver solo casos resistentes (R)", value=True)
 
-# Contar muestras por provincia
-df_conteo = df_muestras.groupby('provincia_id').size().reset_index(name='Total_Muestras')
+# Filtrado dinámico
+if ver_solo_resistentes:
+    # Filtramos donde el resultado sea 'R'
+    df_filtrado = df[df[atb_sel].str.upper() == 'R'].copy()
+    label_mapa = f"Casos Resistentes a {atb_sel}"
+else:
+    # Contamos todas las muestras que tienen algún resultado en ese antibiótico
+    df_filtrado = df[df[atb_sel].notnull()].copy()
+    label_mapa = f"Muestras Analizadas para {atb_sel}"
 
-# Definir la paleta de colores (ej: Reds, Blues, Viridis)
-paleta_color = st.sidebar.selectbox("Selecciona Paleta de Color", ["Reds", "Blues", "Viridis"], index=0)
+# Agrupación por provincia para el color
+df_conteo = df_filtrado.groupby('provincia_mapa').size().reset_index(name='conteo')
 
-# --- 6. CREACIÓN DEL MAPA CON PLOTLY CHOROPLETH ---
-# 'featureidkey' debe coincidir con la propiedad que identifica la provincia en el GeoJSON
-# En el GeoJSON descargado, la propiedad es 'DPA_PROVIN' (código) o 'PROVINCIA' (nombre)
-# Para usar nombres, configuramos featureidkey='properties.PROVINCIA'
+# --- 6. GENERACIÓN DEL MAPA ---
+if not df_conteo.empty:
+    fig = px.choropleth_mapbox(
+        df_conteo,
+        geojson=geojson_ecuador,
+        locations='provincia_mapa',
+        featureidkey='properties.PROVINCIA', # Campo clave en el GeoJSON
+        color='conteo',
+        color_continuous_scale="Reds",
+        mapbox_style="carto-positron",
+        center={"lat": -1.8, "lon": -78.2},
+        zoom=5.5,
+        opacity=0.6,
+        labels={'conteo': 'Cantidad'},
+        title=f"Distribución Geográfica: {label_mapa}"
+    )
 
-fig_mapa = px.choropleth_mapbox(
-    df_conteo, 
-    geojson=geojson_ecuador, 
-    locations='provincia_id',         # Columna en df con el ID
-    featureidkey='properties.PROVINCIA', # Propiedad en el GeoJSON con el ID
-    color='Total_Muestras',          # Columna que define el color
-    color_continuous_scale=paleta_color, # Escala de color
-    mapbox_style="carto-positron",   # Estilo del mapa base (limpio)
-    center={"lat": -1.8, "lon": -78.2}, # Centro de Ecuador
-    zoom=5.8,                         # Nivel de zoom inicial
-    opacity=0.7,                     # Transparencia de los colores
-    labels={'Total_Muestras': 'Muestras'},
-    title=f"Muestras totales registradas por Provincia (Total: {len(df_muestras)})"
-)
+    fig.update_layout(margin={"r":0,"t":50,"l":0,"b":0})
+    
+    # Mostrar Mapa
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Mostrar tabla de focos calientes
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("📍 Desglose por Provincia")
+        st.dataframe(df_conteo.sort_values(by='conteo', ascending=False), use_container_width=True)
+    with col2:
+        st.subheader("🦠 Microorganismos detectados")
+        st.write(df_filtrado['microorganismo'].value_counts())
+else:
+    st.warning(f"No se encontraron datos que coincidan con los filtros para {atb_sel}.")
 
-# Ajustes de diseño
-fig_mapa.update_layout(
-    margin={"r":0,"t":40,"l":0,"b":0},
-    coloraxis_colorbar_title_side="top"
-)
-
-# --- 7. VISUALIZACIÓN ---
-tab1, tab2 = st.tabs(["🗺️ Mapa de Intensidad", "📊 Datos Numéricos"])
-
-with tab1:
-    st.plotly_chart(fig_mapa, use_container_width=True)
-
-with tab2:
-    st.subheader("Registros por Provincia")
-    st.dataframe(df_conteo.sort_values(by='Total_Muestras', ascending=False), use_container_width=True)
-
-# Botón para refrescar caché
-if st.button("🔄 Actualizar Datos"):
+# --- 7. BOTÓN DE ACTUALIZACIÓN ---
+if st.sidebar.button("🔄 Refrescar Base de Datos"):
     st.cache_data.clear()
     st.rerun()
