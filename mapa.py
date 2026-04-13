@@ -13,7 +13,6 @@ st.markdown("""
     .main { background-color: #f5f7f9; }
     div.block-container { padding-top: 2rem; }
     [data-testid="stMetricValue"] { font-size: 1.6rem; font-weight: bold; }
-    /* Estilo para la barra lateral */
     [data-testid="stSidebar"] { background-color: #1e2630; color: white; }
     </style>
     """, unsafe_allow_html=True)
@@ -51,21 +50,21 @@ antibioticos_base = [
     'nitrofurantoina', 'trimetoprim_sulfametoxazol'
 ]
 
-# --- 4. BARRA LATERAL (FILTROS AL LADO IZQUIERDO) ---
+# --- 4. FILTROS (BARRA LATERAL IZQUIERDA) ---
 with st.sidebar:
-    st.header("🔍 Filtros de Búsqueda")
+    st.header("🔍 Filtros")
     
     provincias = ["Todas"] + sorted(df_raw['provincia'].unique().tolist())
-    prov_sel = st.selectbox("📍 Seleccionar Provincia", provincias)
+    prov_sel = st.selectbox("📍 Provincia", provincias)
 
     if prov_sel != "Todas":
         cantones_lista = ["Todos"] + sorted(df_raw[df_raw['provincia'] == prov_sel]['canton'].unique().tolist())
     else:
         cantones_lista = ["Todos"] + sorted(df_raw['canton'].unique().tolist())
-    canton_sel = st.selectbox("🏙️ Seleccionar Cantón", cantones_lista)
+    canton_sel = st.selectbox("🏙️ Cantón", cantones_lista)
 
     micro_list = sorted(df_raw['microorganismo'].unique().tolist())
-    micro_sel = st.selectbox("🦠 Seleccionar Microorganismo", micro_list)
+    micro_sel = st.selectbox("🦠 Microorganismo", micro_list)
 
     atb_sel = st.selectbox("💊 Antibiótico (Mapa)", ["TODOS"] + antibioticos_base)
     
@@ -82,6 +81,7 @@ if prov_sel != "Todas":
 if canton_sel != "Todos":
     df_f = df_f[df_f['canton'] == canton_sel]
 
+# Casos Resistentes (R)
 if atb_sel == "TODOS":
     mask_r = df_f[antibioticos_base].astype(str).apply(lambda x: x.str.upper()).eq('R').any(axis=1)
     df_res_mapa = df_f[mask_r].copy()
@@ -91,39 +91,42 @@ else:
 # --- 6. CUERPO PRINCIPAL ---
 st.title("📊 Vigilancia Epidemiológica de Resistencia")
 
-# KPIs en la parte superior
+# KPIs
 m1, m2, m3, m4 = st.columns(4)
 total_muestras = len(df_f)
 total_res = len(df_res_mapa)
 porc = (total_res / total_muestras * 100) if total_muestras > 0 else 0
 
-m1.metric("Muestras", total_muestras)
-m2.metric("Casos R", total_res)
+m1.metric("Muestras Analizadas", total_muestras)
+m2.metric("Casos Resistentes (R)", total_res)
 m3.metric("% Resistencia", f"{porc:.1f}%")
 m4.metric("Microorganismo", micro_sel)
 
 st.divider()
 
-# --- 7. GRÁFICA DE BARRAS (SIEMPRE VISIBLE) ---
+# --- 7. SECCIÓN DE GRÁFICA DE BARRAS (SIEMPRE ACTIVA) ---
 st.subheader(f"Número de resistencias - {prov_sel} - {micro_sel}")
 
 conteo_data = []
 for atb in antibioticos_base:
     if atb in df_f.columns:
+        # Equivalente al sum(x == "R") de tu código en RStudio
         n_r = (df_f[atb].astype(str).str.upper() == "R").sum()
-        conteo_data.append({'antibiotico': atb.replace('_', ' ').title(), 'resistencias': n_r})
+        conteo_data.append({
+            'antibiotico': atb.replace('_', ' ').title(), 
+            'resistencias': int(n_r)
+        })
 
-df_plot = pd.DataFrame(conteo_data)
+df_plot = pd.DataFrame(conteo_data).sort_values('resistencias', ascending=True)
 
-# Ordenamos para asegurar que el reorder funcione siempre
-df_plot = df_plot.sort_values('resistencias', ascending=True)
-
+# Generación del gráfico con Plotly Express
 fig_res = px.bar(
     df_plot,
     x='resistencias',
     y='antibiotico',
     orientation='h',
     color='resistencias',
+    # Gradiente de Verde a Rojo como en tu ggplot
     color_continuous_scale=['#32CD32', '#FFD700', '#FF0000'],
     labels={'resistencias': 'Número de aislamientos resistentes', 'antibiotico': 'Antibiótico'},
     text='resistencias'
@@ -131,16 +134,16 @@ fig_res = px.bar(
 
 fig_res.update_layout(
     plot_bgcolor='white',
-    xaxis=dict(showgrid=True, gridcolor='lightgrey', title="Aislamientos Resistentes"),
+    xaxis=dict(showgrid=True, gridcolor='lightgrey'),
     yaxis=dict(showgrid=False),
     height=600,
     margin=dict(l=20, r=20, t=30, b=20),
-    coloraxis_showscale=False # Ocultamos la barra lateral de color para que se vea más limpio
+    coloraxis_showscale=False
 )
 
 fig_res.update_traces(textposition='outside', marker_line_color='grey', marker_line_width=0.5)
 
-# Se muestra la gráfica incluso si los valores son 0
+# La gráfica se renderiza incluso con valores en 0
 st.plotly_chart(fig_res, use_container_width=True)
 
 st.divider()
@@ -171,4 +174,4 @@ with col_tbl:
         res_c.columns = ['Cantón', 'Casos R']
         st.dataframe(res_c, use_container_width=True, hide_index=True)
     else:
-        st.info("Sin registros con 'R' para esta selección.")
+        st.info("Sin registros coincidentes.")
