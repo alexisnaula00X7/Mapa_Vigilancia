@@ -10,7 +10,6 @@ from supabase import create_client, Client
 # --- 1. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="LIMS - Vigilancia RAM Ecuador", layout="wide")
 
-# Estilos personalizados para mejorar la visualización
 st.markdown("""
     <style>
     .main { background-color: #f5f7f9; }
@@ -19,7 +18,6 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# Función para normalizar texto (Elimina tildes y eñes, clave para el cruce de datos)
 def normalizar_texto(texto):
     if not texto: return ""
     texto = str(texto).upper().strip()
@@ -30,11 +28,9 @@ def normalizar_texto(texto):
 @st.cache_resource
 def init_connection():
     try:
-        url = st.secrets["SUPABASE_URL"]
-        key = st.secrets["SUPABASE_KEY"]
-        return create_client(url, key)
-    except Exception as e:
-        st.error("Error en las credenciales de Supabase. Revisa los Secrets.")
+        return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+    except Exception:
+        st.error("Error en credenciales de Supabase.")
         return None
 
 @st.cache_data(ttl=600)
@@ -43,17 +39,15 @@ def cargar_datos_base():
     if supabase:
         res = supabase.table("registro_resistencia").select("*").execute()
         df = pd.DataFrame(res.data)
-        # ID normalizado para cruce con mapa
         df['provincia_id'] = df['provincia'].apply(normalizar_texto)
         return df
     return pd.DataFrame()
 
 @st.cache_resource
 def cargar_cartografia():
-    """Intenta cargar Shapefile de GADM, si falla busca el GeoJSON local"""
+    # Usando el nombre exacto de tus archivos: gadm41_ECU_1
     base_name = "gadm41_ECU_1"
     
-    # Intento 1: Shapefile (GADM)
     if os.path.exists(f"{base_name}.shp"):
         try:
             sf = shapefile.Reader(base_name)
@@ -67,35 +61,35 @@ def cargar_cartografia():
                 features.append(dict(type="Feature", geometry=geom, properties=atr, id=atr['ID_NORMALIZADO']))
             return {"type": "FeatureCollection", "features": features}, "id"
         except Exception as e:
-            st.warning(f"Error con SHP, intentando fallback: {e}")
+            st.error(f"Error cargando SHP: {e}")
 
-    # Intento 2: Fallback a GeoJSON local
-    ruta_geojson = "ec-all.geo.json"
-    if os.path.exists(ruta_geojson):
-        with open(ruta_geojson, "r", encoding="utf-8") as f:
-            return json.load(f), "properties.name" # Llave típica en Highcharts/GeoJSON
-            
+    # Fallback si el SHP falla
+    if os.path.exists("ec-allgeo.json"):
+        with open("ec-allgeo.json", "r", encoding="utf-8") as f:
+            return json.load(f), "properties.name"
     return None, None
 
-# Carga inicial
 df_raw = cargar_datos_base()
 geojson_data, feature_key = cargar_cartografia()
 
-# --- 3. FILTROS Y LÓGICA ---
-st.title("📊 Vigilancia Epidemiológica de Resistencia (RAM)")
+# --- 3. DEFINICIÓN ESTRICTA DE ANTIBIÓTICOS (SEGÚN TU FOTO) ---
+lista_atbs_foto = [
+    'ampicilina_sulbactam', 'cefalotina', 'cefazolina', 'ceftazidima',
+    'ceftriaxona', 'cefepima', 'ertapenem', 'meropenem', 'amicacina',
+    'gentamicina', 'ciprofloxacino', 'norfloxacino', 'fosfomicina',
+    'nitrofurantoina', 'trimetoprim_sulfametoxazol'
+]
 
-if df_raw.empty:
-    st.warning("No hay datos disponibles en Supabase.")
-    st.stop()
+# Filtrar solo los que realmente existan en el DataFrame por si acaso
+antibioticos = [atb for atb in lista_atbs_foto if atb in df_raw.columns]
 
-# Identificar columnas de antibióticos automáticamente
-cols_fijas = ["id", "created_at", "provincia", "canton", "microorganismo", "provincia_id"]
-lista_atbs = [c for c in df_raw.columns if c not in cols_fijas]
+# --- 4. INTERFAZ Y FILTROS ---
+st.title("🧪 Vigilancia Epidemiológica de Resistencia (RAM)")
 
 with st.sidebar:
     st.header("⚙️ Configuración")
     micro_sel = st.selectbox("🦠 Microorganismo", sorted(df_raw['microorganismo'].unique().tolist()))
-    atb_sel = st.selectbox("💊 Antibiótico", lista_atbs)
+    atb_sel = st.selectbox("💊 Antibiótico", antibioticos)
     
     st.divider()
     prov_sel = st.selectbox("📍 Filtrar Provincia", ["Todas"] + sorted(df_raw['provincia'].unique().tolist()))
@@ -104,18 +98,15 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-# Filtrado de datos
+# Lógica de filtrado
 df_f = df_raw[df_raw['microorganismo'] == micro_sel].copy()
 if prov_sel != "Todas":
     df_f = df_f[df_f['provincia'] == prov_sel]
 
-# Solo registros que tengan resultado para el ATB seleccionado
 df_atb = df_f[df_f[atb_sel].notnull()].copy()
 df_res = df_atb[df_atb[atb_sel].astype(str).str.upper() == 'R'].copy()
 
-# --- 4. DASHBOARD VISUAL ---
-
-# Fila 1: Métricas
+# --- 5. DASHBOARD ---
 m1, m2, m3, m4 = st.columns(4)
 total_n = len(df_atb)
 total_r = len(df_res)
@@ -124,71 +115,44 @@ pct = (total_r / total_n * 100) if total_n > 0 else 0
 m1.metric("Aislamientos", total_n)
 m2.metric("Resistentes (R)", total_r)
 m3.metric("% Resistencia", f"{pct:.1f}%")
-m4.metric("Provincia Top", df_res['provincia'].mode()[0] if not df_res.empty else "N/A")
+m4.metric("Microorganismo Top", micro_sel)
 
 st.divider()
 
-# Fila 2: Tabs de Análisis
-tab_mapa, tab_graficos, tab_datos = st.tabs(["🗺️ Mapa Epidemiológico", "📈 Gráficos de Perfil", "📋 Tabla de Datos"])
+tab_mapa, tab_perfil, tab_detalles = st.tabs(["🗺️ Mapa de Calor", "📈 Perfil de Resistencia", "📋 Datos Detallados"])
 
 with tab_mapa:
-    col_map, col_info = st.columns([2, 1])
-    
-    with col_map:
-        if geojson_data:
-            # Agrupar por ID normalizado para el mapa
-            df_mapa_final = df_res.groupby('provincia_id').size().reset_index(name='Casos_R')
-            
-            fig_map = px.choropleth_mapbox(
-                df_mapa_final,
-                geojson=geojson_data,
-                locations='provincia_id',
-                featureidkey=feature_key,
-                color='Casos_R',
-                color_continuous_scale="YlOrRd",
-                mapbox_style="carto-positron",
-                center={"lat": -1.8, "lon": -78.5},
-                zoom=5.3,
-                opacity=0.7,
-                title=f"Distribución de Resistencia: {atb_sel.replace('_', ' ').upper()}"
-            )
-            fig_map.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
-            st.plotly_chart(fig_map, use_container_width=True)
-        else:
-            st.error("No se encontró cartografía (gadm41_ECU_1 o ec-all.geo.json)")
-
-    with col_info:
-        st.write("### Resumen por Provincia")
-        if not df_res.empty:
-            resumen_prov = df_res['provincia'].value_counts().reset_index()
-            resumen_prov.columns = ['Provincia', 'Casos R']
-            st.dataframe(resumen_prov, use_container_width=True, hide_index=True)
-        else:
-            st.info("No hay casos resistentes para los filtros seleccionados.")
-
-with tab_graficos:
-    col_g1, col_g2 = st.columns(2)
-    
-    with col_g1:
-        # Gráfico de barras horizontal (Estilo RStudio)
-        st.subheader("Perfil de Resistencia General")
-        conteo_atbs = df_f[lista_atbs].apply(lambda x: x.str.upper().eq('R').sum()).reset_index()
-        conteo_atbs.columns = ['Antibiótico', 'Resistencias']
-        conteo_atbs = conteo_atbs.sort_values('Resistencias', ascending=True)
+    if geojson_data:
+        df_mapa = df_res.groupby('provincia_id').size().reset_index(name='conteo')
         
-        fig_bar = px.bar(conteo_atbs, x='Resistencias', y='Antibiótico', orientation='h',
-                         color='Resistencias', color_continuous_scale='RdYlGn_r')
-        st.plotly_chart(fig_bar, use_container_width=True)
+        fig_map = px.choropleth_mapbox(
+            df_mapa,
+            geojson=geojson_data,
+            locations='provincia_id',
+            featureidkey=feature_key,
+            color='conteo',
+            color_continuous_scale="Reds",
+            mapbox_style="carto-positron",
+            center={"lat": -1.8, "lon": -78.5},
+            zoom=5.5,
+            opacity=0.7,
+            title=f"Mapa de Calor: Resistencia a {atb_sel.replace('_', ' ').title()}"
+        )
+        fig_map.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
+        st.plotly_chart(fig_map, use_container_width=True)
+    else:
+        st.warning("No se pudo cargar la cartografía.")
 
-    with col_g2:
-        st.subheader("Top Cantones afectados")
-        if not df_res.empty:
-            fig_pie = px.pie(df_res, names='canton', hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
-            st.plotly_chart(fig_pie, use_container_width=True)
-
-with tab_datos:
-    st.subheader("Registros filtrados")
-    st.dataframe(df_atb, use_container_width=True)
+with tab_perfil:
+    st.subheader(f"Resistencia acumulada: {micro_sel}")
+    # Calculamos R para todos los ATBs de la foto
+    conteo_total = df_f[antibioticos].apply(lambda x: x.str.upper().eq('R').sum()).reset_index()
+    conteo_total.columns = ['Antibiótico', 'Resistencias']
+    conteo_total = conteo_total.sort_values('Resistencias', ascending=True)
     
-    csv = df_atb.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Descargar Datos CSV", csv, "datos_ram.csv", "text/csv")
+    fig_bar = px.bar(conteo_total, x='Resistencias', y='Antibiótico', orientation='h',
+                     color='Resistencias', color_continuous_scale='RdYlGn_r')
+    st.plotly_chart(fig_bar, use_container_width=True)
+
+with tab_detalles:
+    st.dataframe(df_atb, use_container_width=True)
