@@ -5,135 +5,132 @@ import json
 import os
 from supabase import create_client, Client
 
-# --- 1. CONFIGURACIÓN DE LA PÁGINA ---
-st.set_page_config(page_title="Vigilancia Epidemiológica Ecuador", layout="wide")
+# --- 1. CONFIGURACIÓN E INTERFAZ ---
+st.set_page_config(page_title="LIMS - Dashboard Epidemiológico", layout="wide")
 
-# --- 2. CONEXIÓN A SUPABASE ---
+# Estilo CSS para que se vea más limpio (opcional)
+st.markdown("""
+    <style>
+    .main { background-color: #f5f7f9; }
+    div.block-container { padding-top: 2rem; }
+    </style>
+    """, unsafe_allow_name=True)
+
+# --- 2. CONEXIÓN Y CARGA ---
 @st.cache_resource
 def init_connection():
-    try:
-        url = st.secrets["SUPABASE_URL"]
-        key = st.secrets["SUPABASE_KEY"]
-        return create_client(url, key)
-    except Exception:
-        st.error("No se encontraron las credenciales en st.secrets")
-        return None
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
 
 supabase = init_connection()
 
-# --- 3. CARGA DE DATOS (DB Y GEOJSON LOCAL) ---
 @st.cache_data(ttl=600)
-def cargar_datos_desde_db():
-    try:
-        res = supabase.table("registro_resistencia").select("*").execute()
-        return pd.DataFrame(res.data)
-    except Exception as e:
-        st.error(f"Error al conectar con la tabla: {e}")
-        return pd.DataFrame()
+def cargar_todo():
+    res = supabase.table("registro_resistencia").select("*").execute()
+    df = pd.DataFrame(res.data)
+    with open("ec-all.geo.json", "r", encoding="utf-8") as f:
+        geojson = json.load(f)
+    return df, geojson
 
-@st.cache_resource
-def cargar_geojson_ecuador():
-    # Usamos el archivo que conseguiste y subiste
-    archivo_ruta = "ec-allgeo.json"
-    if os.path.exists(archivo_ruta):
-        with open(archivo_ruta, "r", encoding="utf-8") as f:
-            return json.load(f)
-    else:
-        st.error(f"No se encontró el archivo {archivo_ruta} en la carpeta del proyecto.")
-        return None
+df_raw, geojson_ecuador = cargar_todo()
 
-# --- 4. PROCESAMIENTO ---
-st.title("🧪 Mapa Epidemiológico de Resistencia - Ecuador")
+# --- 3. BARRA SUPERIOR DE FILTROS (Estilo Dashboard) ---
+st.title("📊 Vigilancia Epidemiológica de Resistencia")
 
-df = cargar_datos_desde_db()
-geojson_ecuador = cargar_geojson_ecuador()
+# Creamos 3 columnas para los selectores principales
+c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
 
-if df.empty:
-    st.info("Esperando datos de la base de datos... Asegúrate de tener registros en la tabla.")
-    st.stop()
-
-if not geojson_ecuador:
-    st.stop()
-
-# Estandarización: El archivo ec-all suele usar nombres tipo "Pichincha" (Capitalized)
-# Convertimos "PICHINCHA" de la DB a "Pichincha" para que coincida con el mapa
-df['provincia_mapa'] = df['provincia'].str.strip().str.title()
-# --- 5. FILTROS (ACTUALIZADO) ---
-with st.sidebar:
-    st.header("Configuración")
-    
-    # Lista de antibióticos
+with c1:
     antibioticos = [
         'ampicilina_sulbactam', 'cefalotina', 'cefazolina', 'ceftazidima', 
         'ceftriaxona', 'cefepima', 'ertapenem', 'meropenem', 'amicacina', 
         'gentamicina', 'ciprofloxacino', 'norfloxacino', 'fosfomicina', 
         'nitrofurantoina', 'trimetoprim_sulfametoxazol'
     ]
-    atb_sel = st.selectbox("Antibiótico:", antibioticos)
-    
-    # --- NUEVO FILTRO POR PROVINCIA ---
-    # Obtenemos las provincias únicas directamente de los datos cargados
-    lista_provincias = sorted(df['provincia'].unique().tolist())
-    opciones_provincia = ["Todas"] + lista_provincias
-    provincia_sel = st.selectbox("Filtrar por Provincia:", opciones_provincia)
-    
-    ver_solo_resistentes = st.checkbox("Ver solo resistentes (R)", value=True)
+    atb_sel = st.selectbox("💊 Antibiótico", antibioticos)
 
-# --- 6. LÓGICA DE FILTRADO DINÁMICO ---
+with c2:
+    provincias = ["Todas"] + sorted(df_raw['provincia'].unique().tolist())
+    prov_sel = st.selectbox("📍 Provincia", provincias)
 
-# A. Filtro por Antibiótico (Resistentes vs Todos)
-if ver_solo_resistentes:
-    df_filtrado = df[df[atb_sel].astype(str).str.upper() == 'R'].copy()
-    label_mapa = f"Resistencia a {atb_sel}"
-else:
-    df_filtrado = df[df[atb_sel].notnull()].copy()
-    label_mapa = f"Análisis de {atb_sel}"
+with c3:
+    # Filtro dinámico de cantones según la provincia elegida
+    if prov_sel != "Todas":
+        cantones = ["Todos"] + sorted(df_raw[df_raw['provincia'] == prov_sel]['canton'].unique().tolist())
+    else:
+        cantones = ["Todos"] + sorted(df_raw['canton'].unique().tolist())
+    canton_sel = st.selectbox("🏙️ Cantón", cantones)
 
-# B. Aplicar Filtro de Provincia (Si no es "Todas")
-if provincia_sel != "Todas":
-    df_filtrado = df_filtrado[df_filtrado['provincia'] == provincia_sel]
-    label_mapa += f" en {provincia_sel}"
+with c4:
+    st.write("") # Espaciador
+    if st.button("🔄 Actualizar"):
+        st.cache_data.clear()
+        st.rerun()
 
-# C. Agrupación para el Mapa
-# Usamos .str.title() para que coincida con tu ec-all.geo.json
-df_filtrado['provincia_mapa'] = df_filtrado['provincia'].str.strip().str.title()
-df_conteo = df_filtrado.groupby('provincia_mapa').size().reset_index(name='conteo')
+# --- 4. LÓGICA DE FILTRADO ---
+df = df_raw.copy()
 
-# Agrupación por provincia
-df_conteo = df_filtrado.groupby('provincia_mapa').size().reset_index(name='conteo')
+# Filtrar por Antibiótico (Solo los que tienen datos)
+df = df[df[atb_sel].notnull()]
 
-# --- 6. GENERACIÓN DEL MAPA ---
-if not df_conteo.empty:
+# Filtrar por Provincia
+if prov_sel != "Todas":
+    df = df[df['provincia'] == prov_sel]
+
+# Filtrar por Cantón
+if canton_sel != "Todos":
+    df = df[df['canton'] == canton_sel]
+
+# Definir casos resistentes para el conteo del mapa
+df_res = df[df[atb_sel].astype(str).str.upper() == 'R'].copy()
+
+# --- 5. INDICADORES RÁPIDOS (Cards) ---
+m1, m2, m3, m4 = st.columns(4)
+total_muestras = len(df)
+total_res = len(df_res)
+porcentaje = (total_res / total_muestras * 100) if total_muestras > 0 else 0
+
+m1.metric("Muestras Totales", total_muestras)
+m2.metric("Casos Resistentes (R)", total_res, delta_color="inverse")
+m3.metric("% Resistencia", f"{porcentaje:.1f}%")
+m4.metric("Microorganismo Top", df['microorganismo'].mode()[0] if not df.empty else "N/A")
+
+st.divider()
+
+# --- 6. MAPA Y TABLA ---
+col_mapa, col_tabla = st.columns([2, 1])
+
+with col_mapa:
+    # Agrupamos por provincia para el mapa (usando .title() para tu archivo geojson)
+    df_mapa = df_res.groupby('provincia').size().reset_index(name='conteo')
+    df_mapa['provincia_id'] = df_mapa['provincia'].str.strip().str.title()
+
     fig = px.choropleth_mapbox(
-        df_conteo,
+        df_mapa,
         geojson=geojson_ecuador,
-        locations='provincia_mapa',
-        featureidkey='properties.name', # Esta es la llave estándar en archivos de Highcharts/Natural Earth
+        locations='provincia_id',
+        featureidkey='properties.name',
         color='conteo',
         color_continuous_scale="Reds",
         mapbox_style="carto-positron",
-        center={"lat": -1.8312, "lon": -78.1834},
+        center={"lat": -1.8, "lon": -78.5},
         zoom=5.5,
-        opacity=0.6,
-        labels={'conteo': 'Casos'},
-        title=label_mapa
+        opacity=0.7,
+        title=f"Distribución de Resistencia: {atb_sel}"
     )
-
-    fig.update_layout(margin={"r":0,"t":50,"l":0,"b":0})
+    fig.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
     st.plotly_chart(fig, use_container_width=True)
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("📍 Casos por Provincia")
-        st.dataframe(df_conteo.sort_values(by='conteo', ascending=False), use_container_width=True)
-    with col2:
-        st.subheader("🦠 Microorganismos")
-        if 'microorganismo' in df_filtrado.columns:
-            st.write(df_filtrado['microorganismo'].value_counts())
-else:
-    st.warning(f"No hay datos de resistencia para {atb_sel} en las provincias registradas.")
 
-# --- 7. BOTÓN DE ACTUALIZACIÓN ---
-if st.sidebar.button("🔄 Refrescar"):
-    st.cache_data.clear()
-    st.rerun()
+with col_tabla:
+    st.subheader("📋 Resumen de Datos")
+    # Mostramos los microorganismos más frecuentes en la zona filtrada
+    if not df.empty:
+        resumen_micro = df_res['microorganismo'].value_counts().reset_index()
+        st.dataframe(resumen_micro, use_container_width=True, hide_index=True)
+    else:
+        st.write("Sin datos para los filtros seleccionados.")
+
+# --- 7. TABLA DETALLADA AL FINAL ---
+with st.expander("🔍 Ver registros detallados"):
+    st.dataframe(df, use_container_width=True)
