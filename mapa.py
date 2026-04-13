@@ -87,6 +87,52 @@ if atb_sel == "TODOS":
     df_res_mapa = df_geo[mask_r].copy()
 else:
     df_res_mapa = df_geo[df_geo[atb_sel].astype(str).str.upper() == 'R'].copy()
+# --- GRÁFICA DE BARRAS DINÁMICA ---
+st.subheader(f"Número de resistencias - {prov_sel} - {micro_sel}")
+
+# 1. Preparar los datos del conteo de "R"
+conteo_atb = []
+for atb in antibioticos_base:
+    if atb in df_f.columns:
+        # Contamos cuántas 'R' hay para cada antibiótico según los filtros
+        n_resistencias = df_f[df_f[atb].astype(str).str.upper() == 'R'].shape[0]
+        conteo_atb.append({
+            'Antibiótico': atb.replace('_', ' '), 
+            'Resistencias': n_resistencias
+        })
+
+df_grafico = pd.DataFrame(conteo_atb)
+
+# 2. Crear la gráfica con Plotly (Estilo idéntico a tu imagen)
+if not df_grafico.empty and df_grafico['Resistencias'].sum() > 0:
+    fig_bar = px.bar(
+        df_grafico,
+        x='Resistencias',
+        y='Antibiótico',
+        orientation='h',
+        color='Resistencias',
+        # Escala de color de verde a rojo (RdYlGn_r es invertido para que Rojo = Alto)
+        color_continuous_scale=['#32CD32', '#FFD700', '#FF0000'], 
+        text='Resistencias',
+        category_orders={"Antibiótico": df_grafico.sort_values('Resistencias')['Antibiótico'].tolist()}
+    )
+
+    # 3. Ajustes estéticos para igualar la imagen
+    fig_bar.update_layout(
+        plot_bgcolor='white', # Fondo blanco
+        xaxis=dict(showgrid=True, gridcolor='lightgrey'), # Rejilla visible
+        yaxis=dict(title="Antibiótico", showgrid=False),
+        coloraxis_showscale=True,
+        height=600,
+        margin=dict(l=20, r=20, t=30, b=20)
+    )
+    
+    # Ajuste de las barras
+    fig_bar.update_traces(textposition='outside', marker_line_color='grey', marker_line_width=0.5)
+
+    st.plotly_chart(fig_bar, use_container_width=True)
+else:
+    st.info("No hay datos de resistencia (R) para mostrar en la gráfica con los filtros actuales.")
 
 # --- 6. INDICADORES (KPIs) ---
 m1, m2, m3, m4 = st.columns(4)
