@@ -110,7 +110,6 @@ st.subheader(f"Número de resistencias - {prov_sel} - {micro_sel}")
 conteo_data = []
 for atb in antibioticos_base:
     if atb in df_f.columns:
-        # Equivalente al sum(x == "R") de tu código en RStudio
         n_r = (df_f[atb].astype(str).str.upper() == "R").sum()
         conteo_data.append({
             'antibiotico': atb.replace('_', ' ').title(), 
@@ -119,14 +118,12 @@ for atb in antibioticos_base:
 
 df_plot = pd.DataFrame(conteo_data).sort_values('resistencias', ascending=True)
 
-# Generación del gráfico con Plotly Express
 fig_res = px.bar(
     df_plot,
     x='resistencias',
     y='antibiotico',
     orientation='h',
     color='resistencias',
-    # Gradiente de Verde a Rojo como en tu ggplot
     color_continuous_scale=['#32CD32', '#FFD700', '#FF0000'],
     labels={'resistencias': 'Número de aislamientos resistentes', 'antibiotico': 'Antibiótico'},
     text='resistencias'
@@ -142,13 +139,11 @@ fig_res.update_layout(
 )
 
 fig_res.update_traces(textposition='outside', marker_line_color='grey', marker_line_width=0.5)
-
-# La gráfica se renderiza incluso con valores en 0
 st.plotly_chart(fig_res, use_container_width=True)
 
 st.divider()
 
-# --- 8. MAPA Y TABLA ---
+# --- 8. MAPA Y TABLAS LATERALES ---
 col_map, col_tbl = st.columns([2, 1])
 
 with col_map:
@@ -162,16 +157,29 @@ with col_map:
             featureidkey='properties.name', color='conteo',
             color_continuous_scale="YlOrRd", mapbox_style="carto-positron",
             center={"lat": -1.8, "lon": -78.5}, zoom=5.2, opacity=0.7,
-            title=f"Distribución Geográfica: {atb_sel}"
+            title=f"Distribución Geográfica de Resistencia"
         )
         fig_map.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
         st.plotly_chart(fig_map, use_container_width=True)
 
 with col_tbl:
-    st.subheader("📋 Detalle por Cantón")
+    # --- TABLA 1: CANTONES ---
+    st.subheader("🏙️ Top Cantones (R)")
     if not df_res_mapa.empty:
         res_c = df_res_mapa['canton'].value_counts().reset_index()
         res_c.columns = ['Cantón', 'Casos R']
-        st.dataframe(res_c, use_container_width=True, hide_index=True)
+        st.dataframe(res_c, use_container_width=True, hide_index=True, height=250)
     else:
-        st.info("Sin registros coincidentes.")
+        st.info("Sin datos de cantones.")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # --- TABLA 2: ANTIBIÓTICOS (NUEVA SECCIÓN) ---
+    st.subheader("💊 Top Antibióticos (R)")
+    if not df_plot.empty:
+        # Usamos los datos calculados para la gráfica, ordenados de mayor a menor
+        top_atb = df_plot.sort_values('resistencias', ascending=False).copy()
+        top_atb.columns = ['Antibiótico', 'Casos R']
+        st.dataframe(top_atb, use_container_width=True, hide_index=True, height=300)
+    else:
+        st.info("Sin datos de antibióticos.")
