@@ -58,10 +58,11 @@ if not geojson_ecuador:
 # Estandarización: El archivo ec-all suele usar nombres tipo "Pichincha" (Capitalized)
 # Convertimos "PICHINCHA" de la DB a "Pichincha" para que coincida con el mapa
 df['provincia_mapa'] = df['provincia'].str.strip().str.title()
-
-# --- 5. FILTROS ---
+# --- 5. FILTROS (ACTUALIZADO) ---
 with st.sidebar:
     st.header("Configuración")
+    
+    # Lista de antibióticos
     antibioticos = [
         'ampicilina_sulbactam', 'cefalotina', 'cefazolina', 'ceftazidima', 
         'ceftriaxona', 'cefepima', 'ertapenem', 'meropenem', 'amicacina', 
@@ -69,15 +70,34 @@ with st.sidebar:
         'nitrofurantoina', 'trimetoprim_sulfametoxazol'
     ]
     atb_sel = st.selectbox("Antibiótico:", antibioticos)
+    
+    # --- NUEVO FILTRO POR PROVINCIA ---
+    # Obtenemos las provincias únicas directamente de los datos cargados
+    lista_provincias = sorted(df['provincia'].unique().tolist())
+    opciones_provincia = ["Todas"] + lista_provincias
+    provincia_sel = st.selectbox("Filtrar por Provincia:", opciones_provincia)
+    
     ver_solo_resistentes = st.checkbox("Ver solo resistentes (R)", value=True)
 
-# Lógica de filtrado
+# --- 6. LÓGICA DE FILTRADO DINÁMICO ---
+
+# A. Filtro por Antibiótico (Resistentes vs Todos)
 if ver_solo_resistentes:
     df_filtrado = df[df[atb_sel].astype(str).str.upper() == 'R'].copy()
     label_mapa = f"Resistencia a {atb_sel}"
 else:
     df_filtrado = df[df[atb_sel].notnull()].copy()
     label_mapa = f"Análisis de {atb_sel}"
+
+# B. Aplicar Filtro de Provincia (Si no es "Todas")
+if provincia_sel != "Todas":
+    df_filtrado = df_filtrado[df_filtrado['provincia'] == provincia_sel]
+    label_mapa += f" en {provincia_sel}"
+
+# C. Agrupación para el Mapa
+# Usamos .str.title() para que coincida con tu ec-all.geo.json
+df_filtrado['provincia_mapa'] = df_filtrado['provincia'].str.strip().str.title()
+df_conteo = df_filtrado.groupby('provincia_mapa').size().reset_index(name='conteo')
 
 # Agrupación por provincia
 df_conteo = df_filtrado.groupby('provincia_mapa').size().reset_index(name='conteo')
