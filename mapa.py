@@ -19,7 +19,7 @@ st.set_page_config(page_title="Mapa Epidemiológico Ecuador", layout="wide")
 # --- 3. EXTRACCIÓN DE DATOS ---
 @st.cache_data(ttl=600)  # Se actualiza cada 10 min
 def cargar_datos():
-    res = supabase.table("registros_resistencia").select("*").execute()
+    res = supabase.table("registro_resistencia").select("*").execute()
     return pd.DataFrame(res.data)
 
 df = cargar_datos()
