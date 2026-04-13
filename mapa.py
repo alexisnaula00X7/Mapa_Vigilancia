@@ -12,7 +12,7 @@ st.markdown("""
     <style>
     .main { background-color: #f5f7f9; }
     div.block-container { padding-top: 2rem; }
-    [data-testid="stMetricValue"] { font-size: 1.8rem; }
+    [data-testid="stMetricValue"] { font-size: 1.8rem; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -63,7 +63,7 @@ if df_raw.empty:
 c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
 
 with c3:
-    atb_sel = st.selectbox("💊 Antibiótico (para el mapa)", ["TODOS"] + antibioticos_base)
+    atb_sel = st.selectbox("💊 Antibiótico (Mapa)", ["TODOS"] + antibioticos_base)
 
 with c1:
     provincias = ["Todas"] + sorted(df_raw['provincia'].unique().tolist())
@@ -73,13 +73,19 @@ with c2:
     microorganismos = sorted(df_raw['microorganismo'].unique().tolist())
     micro_sel = st.selectbox("🦠 Microorganismo", microorganismos)
 
+with c4:
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("🔄 Actualizar", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
 # --- 5. LÓGICA DE FILTRADO ---
 df_f = df_raw[df_raw['microorganismo'] == micro_sel].copy()
 
 if prov_sel != "Todas":
     df_f = df_f[df_f['provincia'] == prov_sel]
 
-# Para el mapa de calor
+# Datos para el Mapa
 if atb_sel == "TODOS":
     df_res_mapa = df_f[df_f[antibioticos_base].astype(str).apply(lambda x: x.str.upper()).eq('R').any(axis=1)].copy()
 else:
@@ -97,30 +103,37 @@ m3.metric("% Resistencia", f"{porcentaje:.1f}%")
 
 st.divider()
 
-# --- 7. GRÁFICA SOLICITADA: PERFIL DE RESISTENCIA POR ANTIBIÓTICO ---
-st.subheader(f"📈 Perfil de Resistencia: {micro_sel} en {prov_sel}")
+# --- 7. GRÁFICA DE BARRAS (PERFIL DE RESISTENCIA) ---
+st.subheader(f"📈 Perfil de Resistencia: {micro_sel}")
 
-# Calculamos la cantidad de 'R' para cada antibiótico en los datos filtrados
-conteo_resistencia = []
+# Procesamos el conteo de "R" para cada antibiótico
+conteo_atb = []
 for atb in antibioticos_base:
     if atb in df_f.columns:
-        n_resistentes = df_f[df_f[atb].astype(str).str.upper() == 'R'].shape[0]
-        conteo_resistencia.append({'Antibiótico': atb.replace('_', ' ').title(), 'Cantidad R': n_resistentes})
+        # Contamos cuántos registros tienen "R" (ignorando mayúsculas/minúsculas)
+        n_r = df_f[df_f[atb].astype(str).str.upper() == 'R'].shape[0]
+        conteo_atb.append({
+            'Antibiótico': atb.replace('_', ' ').title(),
+            'Resistencias': n_r
+        })
 
-df_grafica = pd.DataFrame(conteo_resistencia).sort_values('Cantidad R', ascending=True)
+df_plot = pd.DataFrame(conteo_atb).sort_values('Resistencias', ascending=True)
 
-fig_barras = px.bar(
-    df_grafica, 
-    x='Cantidad R', 
-    y='Antibiótico', 
-    orientation='h',
-    color='Cantidad R',
-    color_continuous_scale='Reds',
-    text='Cantidad R',
-    labels={'Cantidad R': 'Número de Aislamientos Resistentes'}
-)
-fig_barras.update_layout(showlegend=False, height=500)
-st.plotly_chart(fig_barras, use_container_width=True)
+if not df_plot.empty and df_plot['Resistencias'].sum() > 0:
+    fig_barras = px.bar(
+        df_plot,
+        x='Resistencias',
+        y='Antibiótico',
+        orientation='h',
+        color='Resistencias',
+        color_continuous_scale='Reds',
+        text='Resistencias',
+        labels={'Resistencias': 'Número de casos R'}
+    )
+    fig_barras.update_layout(height=500, margin=dict(l=20, r=20, t=30, b=20))
+    st.plotly_chart(fig_barras, use_container_width=True)
+else:
+    st.info(f"No se detectaron resistencias para {micro_sel} con los filtros actuales.")
 
 st.divider()
 
@@ -139,7 +152,7 @@ with col_mapa:
             locations='provincia_id',
             featureidkey='properties.name', 
             color='conteo',
-            color_continuous_scale="Reds", 
+            color_continuous_scale="YlOrRd", 
             mapbox_style="carto-positron",
             center={"lat": -1.8, "lon": -78.5},
             zoom=5.5,
@@ -148,10 +161,14 @@ with col_mapa:
         )
         fig_map.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
         st.plotly_chart(fig_map, use_container_width=True)
+    else:
+        st.error("Error al cargar el mapa.")
 
 with col_tabla:
-    st.subheader("📋 Resumen por Cantón (R)")
+    st.subheader("📋 Detalle por Cantón (R)")
     if not df_res_mapa.empty:
         resumen_canton = df_res_mapa['canton'].value_counts().reset_index()
         resumen_canton.columns = ['Cantón', 'Casos R']
         st.dataframe(resumen_canton, use_container_width=True, hide_index=True)
+    else:
+        st.info("Sin registros coincidentes.")
